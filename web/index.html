@@ -5,6 +5,39 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>棋牌室预约</title>
     <style>
+        .status-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+}
+.status-pending {
+    background: #fef3c7;
+    color: #d97706;
+}
+.status-confirmed {
+    background: #dcfce7;
+    color: #15803d;
+}
+.status-cancelled {
+    background: #fee2e2;
+    color: #dc2626;
+}
+.orders-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+.orders-table th, .orders-table td {
+    padding: 12px;
+    text-align: left;
+    border-bottom: 1px solid #e2e8f0;
+}
+.orders-table th {
+    background: #f8fafc;
+    font-weight: 600;
+    color: #1e293b;
+}
         * {
             margin: 0;
             padding: 0;
@@ -546,12 +579,42 @@ async function submitReserve() {
 
 async function loadMyOrders() {
     if (!currentUserId) return;
-    document.getElementById('ordersContainer').innerHTML = `
-        <div class="empty-tip">
-            预约记录功能<br>
-            需要后端实现 /api/myorders 接口
-        </div>
-    `;
+    try {
+        const resp = await fetch(`${API_BASE}/myorders?userId=${currentUserId}`);
+        const orders = await resp.json();
+
+        if (!Array.isArray(orders) || orders.length === 0) {
+            document.getElementById('ordersContainer').innerHTML = '<div class="empty-tip">暂无预约记录</div>';
+            return;
+        }
+
+        let html = '<table class="orders-table"><thead><tr><th>包厢</th><th>预约时间</th><th>时长</th><th>状态</th><th>总价</th></tr></thead><tbody>';
+        orders.forEach(order => {
+            const start = order.startTime.replace('T', ' ').substring(0, 16);
+            const end = order.endTime.replace('T', ' ').substring(0, 16);
+            const startHour = parseInt(start.substring(11, 13));
+            const endHour = parseInt(end.substring(11, 13));
+            const hours = endHour - startHour;
+            const total = order.price * hours;
+            let statusClass = '';
+            if (order.status === '已预约') statusClass = 'status-pending';
+            else if (order.status === '已取消') statusClass = 'status-cancelled';
+            else statusClass = 'status-confirmed';
+
+            html += `<tr>
+                <td>${order.roomName}</td>
+                <td>${start} ~ ${end}</td>
+                <td>${hours}小时</td>
+                <td><span class="status-badge ${statusClass}">${order.status}</span></td>
+                <td>¥${total}</td>
+            </tr>`;
+        });
+        html += '</tbody></table>';
+        document.getElementById('ordersContainer').innerHTML = html;
+    } catch(e) {
+        console.error('加载预约记录失败', e);
+        document.getElementById('ordersContainer').innerHTML = '<div class="empty-tip">加载失败</div>';
+    }
 }
 </script>
 </body>

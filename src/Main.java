@@ -18,6 +18,7 @@ public class Main {
         server.createContext("/api/register", new RegisterHandler());
         server.createContext("/api/login", new LoginHandler());
         server.createContext("/api/reserve", new ReserveHandler());
+        server.createContext("/api/myorders", new MyOrdersHandler());
 
         server.setExecutor(null);
         server.start();
@@ -281,6 +282,78 @@ public class Main {
                 exchange.sendResponseHeaders(500, response.getBytes().length);
                 exchange.getResponseBody().write(response.getBytes());
             }
+            exchange.getResponseBody().close();
+        }
+    }
+    // ==================== MyOrders Handler（我的预约）====================
+    static class MyOrdersHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            setCorsHeaders(exchange);
+            if (handleOptions(exchange)) return;
+
+            String query = exchange.getRequestURI().getQuery();
+            int userId = 0;
+            if (query != null) {
+                for (String pair : query.split("&")) {
+                    String[] kv = pair.split("=");
+                    if (kv.length == 2 && kv[0].equals("userId")) {
+                        userId = Integer.parseInt(kv[1]);
+                    }
+                }
+            }
+
+            if (userId == 0) {
+                String response = "{\"success\": false, \"message\": \"请提供userId\"}";
+                exchange.sendResponseHeaders(400, response.getBytes().length);
+                exchange.getResponseBody().write(response.getBytes());
+                exchange.getResponseBody().close();
+                return;
+            }
+
+            String url = "jdbc:mysql://localhost:3306/chess_room?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true";
+            String user = "root";
+            String dbPassword = "cdy20031219";
+
+            // 查询该用户的预约记录，关联包厢名称
+            String sql = "SELECT r.id, r.start_time, r.end_time, r.status, rm.name as room_name, rm.price " +
+                    "FROM reservation r " +
+                    "JOIN room rm ON r.room_id = rm.id " +
+                    "WHERE r.user_id = ? " +
+                    "ORDER BY r.start_time DESC";
+
+            List<MyOrder> orders = new ArrayList<>();
+
+            try (Connection conn = DriverManager.getConnection(url, user, dbPassword);
+                 PreparedStatement stmt = conn.prepareStatement(sql)) {
+                stmt.setInt(1, userId);
+                ResultSet rs = stmt.executeQuery();
+
+                while (rs.next()) {
+                    MyOrder order = new MyOrder(
+                            rs.getInt("id"),
+                            rs.getString("room_name"),
+                            rs.getString("start_time"),
+                            rs.getString("end_time"),
+                            rs.getString("status"),
+                            rs.getInt("price")
+                    );
+                    orders.add(order);
+                }
+            } catch (SQLException e) {
+                e.printStackTrace();
+                String response = "{\"success\": false, \"message\": \"数据库错误\"}";
+                exchange.sendResponseHeaders(500, response.getBytes().length);
+                exchange.getResponseBody().write(response.getBytes());
+                exchange.getResponseBody().close();
+                return;
+            }
+
+            Gson gson = new Gson();
+            String response = gson.toJson(orders);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.getBytes().length);
+            exchange.getResponseBody().write(response.getBytes());
             exchange.getResponseBody().close();
         }
     }
