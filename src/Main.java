@@ -15,6 +15,9 @@ public class Main {
 
         server.createContext("/api/hello", new HelloHandler());
         server.createContext("/api/rooms", new RoomsHandler());
+        server.createContext("/api/register", new RegisterHandler());
+        server.createContext("/api/login", new LoginHandler());
+        server.createContext("/api/reserve", new ReserveHandler());
 
         server.setExecutor(null);
         server.start();
@@ -23,7 +26,7 @@ public class Main {
         System.out.println("包厢接口：http://localhost:8888/api/rooms");
     }
 
-    // 处理 /api/hello 请求
+    // ==================== Hello Handler ====================
     static class HelloHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -36,28 +39,26 @@ public class Main {
         }
     }
 
-    // 处理 /api/rooms 请求：从数据库读取包厢列表
+    // ==================== Rooms Handler ====================
     static class RoomsHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             List<Room> rooms = new ArrayList<>();
             String url = "jdbc:mysql://localhost:3306/chess_room?useSSL=false&serverTimezone=UTC";
             String user = "root";
-            String password = "cdy20031219";  // 你的密码
+            String password = "cdy20031219";
 
-            // 数据库连接与查询
             try (Connection conn = DriverManager.getConnection(url, user, password);
                  Statement stmt = conn.createStatement();
                  ResultSet rs = stmt.executeQuery("SELECT name, capacity, price, status FROM room")) {
 
                 while (rs.next()) {
-                    Room room = new Room(
+                    rooms.add(new Room(
                             rs.getString("name"),
                             rs.getInt("capacity"),
                             rs.getInt("price"),
                             rs.getString("status")
-                    );
-                    rooms.add(room);
+                    ));
                 }
             } catch (SQLException e) {
                 e.printStackTrace();
@@ -70,7 +71,6 @@ public class Main {
                 return;
             }
 
-            // 返回 JSON
             Gson gson = new Gson();
             String response = gson.toJson(rooms);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
@@ -78,6 +78,159 @@ public class Main {
             OutputStream os = exchange.getResponseBody();
             os.write(response.getBytes());
             os.close();
+        }
+    }
+
+    // ==================== Register Handler ====================
+    static class RegisterHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            String body = new String(exchange.getRequestBody().readAllBytes());
+            String phone = "";
+            String password = "";
+            for (String pair : body.split("&")) {
+                String[] kv = pair.split("=");
+                if (kv[0].equals("phone")) phone = kv[1];
+                if (kv[0].equals("password")) password = kv[1];
+            }
+
+            String url = "jdbc:mysql://localhost:3306/chess_room?useSSL=false&serverTimezone=UTC";
+            String user = "root";
+            String dbPassword = "cdy20031219";
+
+            try (Connection conn = DriverManager.getConnection(url, user, dbPassword);
+                 PreparedStatement stmt = conn.prepareStatement("INSERT INTO user (phone, password) VALUES (?, ?)")) {
+                stmt.setString(1, phone);
+                stmt.setString(2, password);
+                stmt.executeUpdate();
+                String response = "{\"success\": true, \"message\": \"注册成功\"}";
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, response.getBytes().length);
+                exchange.getResponseBody().write(response.getBytes());
+            } catch (SQLException e) {
+                String response = "{\"success\": false, \"message\": \"手机号已存在\"}";
+                exchange.sendResponseHeaders(400, response.getBytes().length);
+                exchange.getResponseBody().write(response.getBytes());
+            }
+            exchange.getResponseBody().close();
+        }
+    }
+
+    // ==================== Login Handler ====================
+    static class LoginHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            String query = exchange.getRequestURI().getQuery();
+            String phone = "", password = "";
+            if (query != null) {
+                for (String pair : query.split("&")) {
+                    String[] kv = pair.split("=");
+                    if (kv.length == 2 && kv[0].equals("phone")) phone = kv[1];
+                    if (kv.length == 2 && kv[0].equals("password")) password = kv[1];
+                }
+            }
+
+            String url = "jdbc:mysql://localhost:3306/chess_room?useSSL=false&serverTimezone=UTC";
+            String user = "root";
+            String dbPassword = "cdy20031219";
+
+            try (Connection conn = DriverManager.getConnection(url, user, dbPassword);
+                 PreparedStatement stmt = conn.prepareStatement(
+                         "SELECT id, name, level FROM user WHERE phone = ? AND password = ?")) {
+                stmt.setString(1, phone);
+                stmt.setString(2, password);
+                ResultSet rs = stmt.executeQuery();
+
+                if (rs.next()) {
+                    String response = String.format(
+                            "{\"success\": true, \"userId\": %d, \"name\": \"%s\", \"level\": \"%s\"}",
+                            rs.getInt("id"), rs.getString("name"), rs.getString("level"));
+                    exchange.getResponseHeaders().set("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(200, response.getBytes().length);
+                    exchange.getResponseBody().write(response.getBytes());
+                } else {
+                    String response = "{\"success\": false, \"message\": \"手机号或密码错误\"}";
+                    exchange.sendResponseHeaders(401, response.getBytes().length);
+                    exchange.getResponseBody().write(response.getBytes());
+                }
+            } catch (SQLException e) {
+                e.printStackTrace();
+                String response = "{\"success\": false, \"message\": \"服务器错误\"}";
+                exchange.sendResponseHeaders(500, response.getBytes().length);
+                exchange.getResponseBody().write(response.getBytes());
+            }
+            exchange.getResponseBody().close();
+        }
+    }
+
+    // ==================== Reserve Handler ====================
+    static class ReserveHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            String body = new String(exchange.getRequestBody().readAllBytes());
+            int userId = 0, roomId = 0;
+            String startTime = "", endTime = "";
+            for (String pair : body.split("&")) {
+                String[] kv = pair.split("=");
+                if (kv.length == 2 && kv[0].equals("userId")) userId = Integer.parseInt(kv[1]);
+                if (kv.length == 2 && kv[0].equals("roomId")) roomId = Integer.parseInt(kv[1]);
+                if (kv.length == 2 && kv[0].equals("startTime")) startTime = kv[1];
+                if (kv.length == 2 && kv[0].equals("endTime")) endTime = kv[1];
+            }
+
+            String url = "jdbc:mysql://localhost:3306/chess_room?useSSL=false&serverTimezone=UTC";
+            String user = "root";
+            String dbPassword = "cdy20031219";
+
+            try (Connection conn = DriverManager.getConnection(url, user, dbPassword);
+                 PreparedStatement checkStmt = conn.prepareStatement(
+                         "SELECT id FROM reservation WHERE room_id = ? AND " +
+                                 "((start_time <= ? AND end_time > ?) OR " +
+                                 "(start_time < ? AND end_time >= ?))")) {
+                checkStmt.setInt(1, roomId);
+                checkStmt.setString(2, endTime);
+                checkStmt.setString(3, startTime);
+                checkStmt.setString(4, endTime);
+                checkStmt.setString(5, startTime);
+                ResultSet rs = checkStmt.executeQuery();
+
+                if (rs.next()) {
+                    String response = "{\"success\": false, \"message\": \"该时段已被预约\"}";
+                    exchange.sendResponseHeaders(409, response.getBytes().length);
+                    exchange.getResponseBody().write(response.getBytes());
+                    exchange.getResponseBody().close();
+                    return;
+                }
+
+                try (PreparedStatement insertStmt = conn.prepareStatement(
+                        "INSERT INTO reservation (user_id, room_id, start_time, end_time) VALUES (?, ?, ?, ?)")) {
+                    insertStmt.setInt(1, userId);
+                    insertStmt.setInt(2, roomId);
+                    insertStmt.setString(3, startTime);
+                    insertStmt.setString(4, endTime);
+                    insertStmt.executeUpdate();
+                    String response = "{\"success\": true, \"message\": \"预约成功\"}";
+                    exchange.getResponseHeaders().set("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(200, response.getBytes().length);
+                    exchange.getResponseBody().write(response.getBytes());
+                }
+            } catch (SQLException e) {
+                e.printStackTrace();
+                String response = "{\"success\": false, \"message\": \"服务器错误\"}";
+                exchange.sendResponseHeaders(500, response.getBytes().length);
+                exchange.getResponseBody().write(response.getBytes());
+            }
+            exchange.getResponseBody().close();
         }
     }
 }
